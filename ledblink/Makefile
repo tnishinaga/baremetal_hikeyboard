@@ -1,13 +1,12 @@
 CROSS_COMPILE=aarch64-linux-gnu-
 PREFIX=/usr/aarch64-linux-gnu/
-TOOLCHAIN=/usr/bin/
 
-CC=	$(TOOLCHAIN)/$(CROSS_COMPILE)gcc
-AS= $(TOOLCHAIN)/$(CROSS_COMPILE)gcc
-CPP=$(TOOLCHAIN)/$(CROSS_COMPILE)gcc
-LD= $(TOOLCHAIN)/$(CROSS_COMPILE)ld
-OBJDUMP= $(TOOLCHAIN)/$(CROSS_COMPILE)objdump
-OBJCOPY= $(TOOLCHAIN)/$(CROSS_COMPILE)objcopy
+CC= $(CROSS_COMPILE)gcc
+AS= $(CROSS_COMPILE)gcc
+CPP= $(CROSS_COMPILE)gcc
+LD= $(CROSS_COMPILE)ld
+OBJDUMP= $(CROSS_COMPILE)objdump
+OBJCOPY= $(CROSS_COMPILE)objcopy
 
 # libgcc
 LIBGCC= $(shell $(CC) -print-libgcc-file-name)
