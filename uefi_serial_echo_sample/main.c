@@ -27,7 +27,8 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         handlers
     );
     if (efi_status == EFI_BUFFER_TOO_SMALL) {
-        efi_status = BS->AllocatePool(
+        efi_status = uefi_call_wrapper(BS->AllocatePool,
+            3,
             EfiBootServicesData,
             handlers_size,
             (VOID **)&handlers
@@ -46,6 +47,7 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         FreePool(handlers);
         return efi_status;
     }
+
 
     // get SERIAL_IO_PROTOCOL
     // use COM0
@@ -79,7 +81,7 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         switch (efi_status) {
             case EFI_SUCCESS:
                 while (control & EFI_SERIAL_INPUT_BUFFER_EMPTY) {
-                    serialio->GetControl(serialio, &control);
+                    uefi_call_wrapper(serialio->GetControl, 2, serialio, &control);
                 }
                 break;
             case EFI_UNSUPPORTED:
@@ -123,7 +125,7 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         switch (efi_status) {
             case EFI_SUCCESS:
                 while (!(control & EFI_SERIAL_OUTPUT_BUFFER_EMPTY)) {
-                    serialio->GetControl(serialio, &control);
+                    efi_status = uefi_call_wrapper(serialio->GetControl, 2, serialio, &control);
                 }
                 break;
             case EFI_UNSUPPORTED:
