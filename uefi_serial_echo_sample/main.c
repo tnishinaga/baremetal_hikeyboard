@@ -95,7 +95,7 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         // read charater
         efi_status = uefi_call_wrapper(
             serialio->Read,
-            1,
+            3,
             serialio, &buffer_size, buffer
         );
         switch (efi_status) {
@@ -109,8 +109,6 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         }
             
 
-
-        serialio->Write(serialio, &buffer_size, buffer);
         efi_status = uefi_call_wrapper(
             serialio->Write,
             3,
