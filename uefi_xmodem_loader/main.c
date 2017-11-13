@@ -13,7 +13,7 @@
 #define XMODEM_CAN 0x18
 #define XMODEM_EOF 0x1a
 
-#define XMODEM_BLK_SZ 128
+#define XMODEM_BLOCK_SIZE (1+2+128+1)
 
 
 VOID
@@ -139,57 +139,74 @@ efi_serial_putc(SERIAL_IO_INTERFACE *serialio, UINTN c)
 }
 
 VOID
-xmodem_receive_start(SERIAL_IO_INTERFACE *serialio)
-{
-    while (1) {
-        INTN header;
-        wait_ms(3000);
-        Print(L"Send NAK\n");
-        efi_serial_putc(serialio, (UINTN)XMODEM_NAK);
-        header = efi_serial_getc_timeout(serialio);
-        Print(L"header = %d\n", header);
-        if (header >= 0 && header == XMODEM_SOH){
-            break;
-        }
-    }
-}
-
-VOID
 uefi_xmodem_receive(SERIAL_IO_INTERFACE *serialio)
 {
-    xmodem_receive_start(serialio);
+    #define XMODEM_SERIAL_RETRY_MAX 10
+    #define XMODEM_NAK_LIMIT 3
 
-    INTN header = XMODEM_SOH;
-    INTN stage = 0;
-    while (header != XMODEM_EOF && stage < 3) {
-        INTN blocknum = efi_serial_getc(serialio);
-        Print(L"blocknum = %02x\n", blocknum);
-        INTN blocknum_bitrev = efi_serial_getc(serialio);
-        Print(L"~blocknum = %02x\n", blocknum_bitrev);
-        UINT8 data[XMODEM_BLK_SZ];
-        for (INTN i = 0; i < XMODEM_BLK_SZ; i++) {
-            data[i] = efi_serial_getc(serialio) & 0xff;
+    INTN xmodem_nak_count = 0;
+    INTN first_flag = 1;
+
+    while (1) {
+        if (first_flag == 1){
+            wait_ms(1000);
+            efi_serial_putc(serialio, XMODEM_NAK);
         }
-        Print(L"data hexdump\n");
-        for (UINTN i = 0; i < XMODEM_BLK_SZ; i+=8) {
-            for (UINTN j = 0; j < 8; j++) {
-                Print(L"%02x ", data[i+j]);
+
+        // read header
+        INTN retry;
+        INTN c = efi_serial_getc_timeout(serialio);
+
+        if ( c == XMODEM_SOH ) {
+            // receive 2 + 128 bytes
+            UINT8 buf[XMODEM_BLOCK_SIZE * 2] = {0};
+            buf[0] = XMODEM_SOH;
+            INTN receive_bytes = 1;
+            for (retry = 0; retry < XMODEM_SERIAL_RETRY_MAX; retry++) {
+                while (receive_bytes < XMODEM_BLOCK_SIZE) {
+                    INTN c = efi_serial_getc_timeout(serialio);
+                    if ( c < 0 ) {
+                        continue;
+                    }
+                    buf[receive_bytes] = c;
+                    receive_bytes++;
+                }
+            } // retry end
+            if ( (receive_bytes < XMODEM_BLOCK_SIZE)) {
+                if (xmodem_nak_count < XMODEM_NAK_LIMIT) {
+                    Print(L"Send NAK!!\n");
+                    efi_serial_putc(serialio, XMODEM_NAK);
+                    xmodem_nak_count++;
+                    continue; // continue from top
+                } else {
+                    // Cancel
+                    Print(L"xmodem receive failure!!\n");
+                    efi_serial_putc(serialio, XMODEM_CAN);
+                    break; // exit while(1) loop
+                }
             }
-            Print(L"\n");
+            // else 
+            // dump received data
+            for ( INTN i = 0; i < XMODEM_BLOCK_SIZE; i += 8) {
+                for ( INTN j = 0; j < 8; j++ ) {
+                    if ( (i+j) > XMODEM_BLOCK_SIZE) {
+                        break;
+                    }
+                    Print(L"%02x ", buf[i+j]);
+                }
+                Print(L"\n");
+            }
+        } else if (c == XMODEM_EOT) {
+            // end
+            efi_serial_putc(serialio, XMODEM_ACK);
+            break;
+        } else {
+            // skip
+            continue;
         }
-        INTN checksum = efi_serial_getc(serialio);
-        Print(L"checksum = %02x\n", checksum);
-
         efi_serial_putc(serialio, XMODEM_ACK);
-        Print(L"Send ACK\n");
-        header = efi_serial_getc(serialio);
-        Print(L"header =  %02x\n", header);
-        stage++;
+        first_flag = 0;
     }
-
-    efi_serial_putc(serialio, XMODEM_ACK);
-    Print(L"Send ACK\n");
-
     return;
 }
 
