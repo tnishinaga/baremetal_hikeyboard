@@ -14,6 +14,16 @@
 #define XMODEM_EOF 0x1a
 
 #define XMODEM_BLOCK_SIZE (1+2+128+1)
+#define XMODEM_DATA_SIZE (128)
+
+
+typedef struct {
+    UINT8 soh;
+    UINT8 blknum;
+    UINT8 blknum_rev;
+    UINT8 data[128];
+    UINT8 checksum;
+} __attribute__((__packed__)) __attribute__((aligned(4))) XMODEM_BLOCK;
 
 
 VOID
@@ -146,18 +156,30 @@ uefi_xmodem_receive(SERIAL_IO_INTERFACE *serialio)
 
     INTN xmodem_nak_count = 0;
     INTN first_flag = 1;
+    INTN next_block_number = 1;
 
     while (1) {
-        if (first_flag == 1){
-            wait_ms(1000);
-            efi_serial_putc(serialio, XMODEM_NAK);
-        }
-
-        // read header
         INTN retry;
-        INTN c = efi_serial_getc_timeout(serialio);
+        INTN c;
+
+        if (first_flag == 1){
+            wait_ms(2000);
+            Print(L"Send NAK at line:%d\n", __LINE__);
+            efi_serial_putc(serialio, XMODEM_NAK);
+            for (retry = 0; retry < XMODEM_SERIAL_RETRY_MAX; retry++) {
+                c = efi_serial_getc_timeout(serialio);
+                if (c == XMODEM_SOH || c == XMODEM_EOT) {
+                    break;
+                }
+            } // retry end
+        } else {
+            c = efi_serial_getc_timeout(serialio);
+        }
+        
+        
 
         if ( c == XMODEM_SOH ) {
+            first_flag = 0;
             // receive 2 + 128 bytes
             UINT8 buf[XMODEM_BLOCK_SIZE * 2] = {0};
             buf[0] = XMODEM_SOH;
@@ -174,7 +196,7 @@ uefi_xmodem_receive(SERIAL_IO_INTERFACE *serialio)
             } // retry end
             if ( (receive_bytes < XMODEM_BLOCK_SIZE)) {
                 if (xmodem_nak_count < XMODEM_NAK_LIMIT) {
-                    Print(L"Send NAK!!\n");
+                    Print(L"Send NAK at line:%d\n", __LINE__);
                     efi_serial_putc(serialio, XMODEM_NAK);
                     xmodem_nak_count++;
                     continue; // continue from top
@@ -196,6 +218,36 @@ uefi_xmodem_receive(SERIAL_IO_INTERFACE *serialio)
                 }
                 Print(L"\n");
             }
+            // error check
+            XMODEM_BLOCK *blk = (XMODEM_BLOCK *)buf;
+            UINT8 blknum_xor = blk->blknum ^ blk->blknum_rev;
+            UINTN checksum = 0;
+            for (INTN i = 0; i < XMODEM_DATA_SIZE; i++ ) {
+                checksum = (checksum + (UINTN)blk->data[i]) % 256;
+            }
+            if ((blknum_xor != 0xff) ||
+                (blk->blknum != next_block_number) ||
+                (blk->checksum != checksum)
+            ) {
+                // error
+                if (blknum_xor != 0xff) {
+                    Print(L"Error: block number != ~(block number)\n");
+                    Print(L"blk->blknum : %02x, blk->blknum_rev : %02x\n", blk->blknum, blk->blknum_rev);
+                }
+                if (blk->blknum != next_block_number) {
+                    Print(L"Error: block number != next_block_number\n");
+                    Print(L"blk->blknum : %02x, next_block_number : %02x\n", blk->blknum, next_block_number);
+                }
+                if (blk->checksum != checksum) {
+                    Print(L"Error: checksum missmatch\n");
+                    Print(L"blk->checksum : %02x, checksum : %02x\n", blk->checksum, checksum);
+                }
+                // send NAK
+                Print(L"Send NAK at line:%d\n", __LINE__);
+                efi_serial_putc(serialio, XMODEM_NAK);
+                xmodem_nak_count++;
+                continue; // continue from top
+            }
         } else if (c == XMODEM_EOT) {
             // end
             efi_serial_putc(serialio, XMODEM_ACK);
@@ -204,8 +256,9 @@ uefi_xmodem_receive(SERIAL_IO_INTERFACE *serialio)
             // skip
             continue;
         }
+        Print(L"Receive success!\n");
+        next_block_number = (next_block_number + 1) % 256;
         efi_serial_putc(serialio, XMODEM_ACK);
-        first_flag = 0;
     }
     return;
 }
