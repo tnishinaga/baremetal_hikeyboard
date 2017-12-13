@@ -1,5 +1,6 @@
 CROSS_COMPILE=aarch64-linux-gnu-
 PREFIX=/usr/aarch64-linux-gnu/
+ARCH=aarch64
 
 CC= $(CROSS_COMPILE)gcc
 AS= $(CROSS_COMPILE)gcc
@@ -22,7 +23,8 @@ INCLUDES= -I. \
 	-I$(EFI_INCLUDE)/protocol
 
 # CFLAGS
-CFLAGS= -std=c11 -g3 -O2 -Wall -Wextra -Werror \
+CFLAGS= -DCONFIG_$(ARCH) \
+	-std=c11 -g3 -O2 -Wall -Wextra -Werror \
 	-fshort-wchar -fno-strict-aliasing \
 	-fno-merge-all-constants -ffreestanding \
 	-fno-stack-protector -fno-stack-check

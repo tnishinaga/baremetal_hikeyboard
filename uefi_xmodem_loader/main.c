@@ -16,8 +16,11 @@
 #define XMODEM_BLOCK_SIZE (1+2+128+1)
 #define XMODEM_DATA_SIZE (128)
 
-#define MY_DEBUG 0
+#define MY_DEBUG 1
 
+EFI_FILE_PROTOCOL *file_protocol_root = 0;
+
+#define MY_EFI_ASSERT(status, line) if(EFI_ERROR(status)) efi_panic(status, line);
 
 typedef struct {
     UINT8 soh;
@@ -28,10 +31,11 @@ typedef struct {
 } __attribute__((__packed__)) __attribute__((aligned(4))) XMODEM_BLOCK;
 
 
+
 VOID
-efi_panic(EFI_STATUS efi_status)
+efi_panic(EFI_STATUS efi_status, INTN line)
 {
-    Print(L"panic\n");
+    Print(L"panic at line:%d\n", line);
     Print(L"EFI_STATUS = %d\n", efi_status);
     while (1);
     // TODO: change while loop to BS->Exit
@@ -49,9 +53,54 @@ efi_debug_Print (
     }
     va_list     args;
     UINTN       back;
+    CHAR16      strbuf[1024];
+    EFI_STATUS  efi_status;
 
     va_start (args, fmt);
-    back = Print (fmt, args);
+    back = VSPrint ((VOID *)strbuf, 0, fmt, args);
+
+    EFI_FILE_PROTOCOL *LogFile = 0;
+    CHAR16 *Path = L"log.txt";
+    efi_status = uefi_call_wrapper(
+        file_protocol_root->Open,
+        5,
+        file_protocol_root,
+        &LogFile,
+        Path,
+        EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+        0
+    );
+    if (EFI_ERROR(efi_status)) {
+        Print(L"Error at %d\n", __LINE__);
+        return efi_status;
+    }
+
+    // write to file
+    UINTN strbuf_size = StrLen(strbuf) * sizeof(CHAR16);
+    efi_status = uefi_call_wrapper(
+            LogFile->Write,
+            3,
+            LogFile,
+            &strbuf_size,
+            (VOID *)strbuf
+    );
+    if (EFI_ERROR(efi_status)) {
+        Print(L"Error at %d\n", __LINE__);
+        return efi_status;
+    }
+
+    efi_status = uefi_call_wrapper(
+            LogFile->Flush,
+            1,
+            LogFile
+    );
+
+    efi_status = uefi_call_wrapper(LogFile->Close, 1, LogFile);
+    if (EFI_ERROR(efi_status)) {
+        Print(L"Error at %d\n", __LINE__);
+        return efi_status;
+    }
+    
     va_end (args);
     return back;
 }
@@ -63,63 +112,188 @@ VOID wait_ms(UINTN ms)
     EFI_EVENT TimerEvent;
     UINTN Index = 0;
     efi_status = uefi_call_wrapper(BS->CreateEvent, 5, EFI_EVENT_TIMER, 0, NULL, NULL, &TimerEvent);
-    if (EFI_ERROR (efi_status)) {
-        efi_panic(efi_status);
-    }
+    MY_EFI_ASSERT(efi_status, __LINE__);
     // 100ns * 10000 = 1ms
     efi_status = uefi_call_wrapper(BS->SetTimer, 3, TimerEvent, TimerRelative, ms * 10000);
-    if (EFI_ERROR (efi_status)) {
-        efi_panic(efi_status);
-    }
+    MY_EFI_ASSERT(efi_status, __LINE__);
     efi_status = uefi_call_wrapper(BS->WaitForEvent, 3, 1, &TimerEvent, &Index);
-    if (EFI_ERROR (efi_status)) {
-        efi_panic(efi_status);
-    }
+    MY_EFI_ASSERT(efi_status, __LINE__);
     // Timeout
     efi_status = uefi_call_wrapper(BS->CloseEvent, 1, TimerEvent);
-    if (EFI_ERROR (efi_status)) {
-        efi_panic(efi_status);
+    MY_EFI_ASSERT(efi_status, __LINE__);
+}
+
+EFI_STATUS
+search_serial_handlers(EFI_HANDLE **handlers, INTN *handler_items)
+{
+    EFI_STATUS efi_status;
+    EFI_GUID serial_io_protocol = SERIAL_IO_PROTOCOL;
+
+    // search handler
+    UINTN handlers_size = 0;
+    *handlers = NULL;
+    efi_status = uefi_call_wrapper(
+        BS->LocateHandle,
+        5,
+        ByProtocol,
+        &serial_io_protocol,
+        0,
+        &handlers_size,
+        *handlers
+    );
+    if (efi_status == EFI_BUFFER_TOO_SMALL) {
+        efi_status = uefi_call_wrapper(BS->AllocatePool,
+            3,
+            EfiBootServicesData,
+            handlers_size,
+            (VOID **)handlers
+        );
+        efi_status = uefi_call_wrapper(
+            BS->LocateHandle,
+            5,
+            ByProtocol,
+            &serial_io_protocol,
+            0,
+            &handlers_size,
+            *handlers
+        );
+    }
+    if (*handlers == NULL || EFI_ERROR(efi_status)) {
+        FreePool(*handlers);
+        *handlers = NULL;
+        return efi_status;
+    }
+
+    *handler_items = handlers_size / sizeof(EFI_HANDLE);
+    return EFI_SUCCESS;
+}
+
+
+EFI_STATUS
+open_serial_port(SERIAL_IO_INTERFACE **serialio, EFI_HANDLE *handlers, INTN port)
+{
+    EFI_STATUS efi_status;
+    EFI_GUID serial_io_protocol = SERIAL_IO_PROTOCOL;
+
+    efi_status = uefi_call_wrapper(
+		BS->HandleProtocol,
+        3,
+        handlers[port],
+		&serial_io_protocol,
+        (VOID **)serialio
+    );
+    return efi_status;
+}
+
+
+INTN
+serial_receive_wait(SERIAL_IO_INTERFACE *serialio, INTN timeout_ms)
+{
+    EFI_STATUS efi_status;
+    EFI_EVENT TimerEvent;
+
+    // Create Timer
+    efi_status = uefi_call_wrapper(BS->CreateEvent, 5, EFI_EVENT_TIMER, 0, NULL, NULL, &TimerEvent);
+    MY_EFI_ASSERT(efi_status, __LINE__);
+    // 100ns * 10000 = 1ms
+    efi_status = uefi_call_wrapper(BS->SetTimer, 3, TimerEvent, TimerRelative, timeout_ms * 10000);
+    MY_EFI_ASSERT(efi_status, __LINE__);
+
+    INTN result = 0;
+
+    while(1) {
+        UINT32 control;
+        efi_status = uefi_call_wrapper(serialio->GetControl, 2, serialio, &control);
+        if (efi_status == EFI_SUCCESS) {
+            if (!(control & EFI_SERIAL_INPUT_BUFFER_EMPTY)) {
+                // received
+                result = 1;
+                break;
+            }
+        } else if (efi_status == EFI_UNSUPPORTED) {
+            Print(L"serialio->GetControl is unsuppoerted\n");
+            result = -1;
+            break;
+        } else {
+            // error
+            efi_panic(efi_status, __LINE__);
+        }
+
+        // timeout check
+        efi_status = uefi_call_wrapper(BS->CheckEvent, 1, TimerEvent);
+        if (efi_status == EFI_SUCCESS) {
+            // timeout
+            result = 2;
+            break;
+        } else if (efi_status == EFI_NOT_READY) {
+            continue;
+        } else {
+            // error
+            efi_panic(efi_status, __LINE__);
+        }
+    }
+    
+    // Close time event
+    efi_status = uefi_call_wrapper(BS->CloseEvent, 1, TimerEvent);
+    MY_EFI_ASSERT(efi_status, __LINE__);
+
+    if (result == 1) {
+        // received
+        return 0;
+    } else if (result == 2) {
+        // timeout
+        return 1;
+    } else {
+        // unsupported
+        return -1;
     }
 }
 
 INTN
-efi_serial_getc_timeout(SERIAL_IO_INTERFACE *serialio)
+efi_serial_getc_timeout(SERIAL_IO_INTERFACE *serialio, INTN timeout_ms)
 {
     EFI_STATUS efi_status = -1;
 
     INTN buffer = 0;
-    while (1) {
-        UINTN buffer_size = 1;
+    UINTN buffer_size = 1;
+
+    INTN recv_result = serial_receive_wait(serialio, timeout_ms);
+    if (recv_result == 0) {
         // read character
         efi_status = uefi_call_wrapper(
             serialio->Read,
             3,
             serialio, &buffer_size, &buffer
         );
-        if (efi_status == EFI_SUCCESS && buffer_size > 0) {
-            // success
-            break;
-        }
-        if (EFI_ERROR(efi_status) && efi_status != EFI_TIMEOUT) {
+        // error check
+        if (efi_status == EFI_DEVICE_ERROR) {
             // efi_status == EFI_DEVICE_ERROR
             Print(L"serialio->Read return EFI_DEVICE_ERROR\n");
-            efi_panic(efi_status);
+            efi_panic(efi_status, __LINE__);
         }
-        // if efi_status == TIMEOUT then continue
-        if (efi_status == EFI_TIMEOUT) {
+        if (efi_status == EFI_TIMEOUT || buffer_size <= 0) {
+            // timeout or unknown error
             return EOF;
         }
+    } else if (recv_result == 1) {
+        // timeout 
+        return EOF;
+    } else {
+        // unsupported
+        return EOF;
     }
+
     return buffer;
 }
-
+ 
 
 INTN
 efi_serial_getc(SERIAL_IO_INTERFACE *serialio)
 {
     INTN c;
+    INTN default_timeout = 100;
     do {
-        c = efi_serial_getc_timeout(serialio);
+        c = efi_serial_getc_timeout(serialio, default_timeout);
     } while ( c == EOF );
     return c;
 }
@@ -144,7 +318,7 @@ efi_serial_putc(SERIAL_IO_INTERFACE *serialio, UINTN c)
         if (EFI_ERROR(efi_status) && efi_status != EFI_TIMEOUT) {
             // efi_status == EFI_DEVICE_ERROR
             Print(L"serialio->Read return EFI_DEVICE_ERROR\n");
-            efi_panic(efi_status);
+            efi_panic(efi_status, __LINE__);
         }
         // if efi_status == TIMEOUT then continue
     }
@@ -163,193 +337,156 @@ efi_serial_putc(SERIAL_IO_INTERFACE *serialio, UINTN c)
             default:
                 // error
                 Print(L"serialio->GetControl return EFI_DEVICE_ERROR\n");
-                efi_panic(efi_status);
+                efi_panic(efi_status, __LINE__);
         }
     }
     return 1;
 }
 
+
 VOID
 uefi_xmodem_receive(SERIAL_IO_INTERFACE *serialio)
 {
-    #define XMODEM_SERIAL_RETRY_MAX 10
+    #define XMODEM_SERIAL_RETRY_MAX 20
     #define XMODEM_NAK_LIMIT 3
 
-    INTN xmodem_nak_count = 0;
-    INTN first_flag = 1;
-    INTN next_block_number = 1;
+    INTN firsttime = 1;
+    INTN nak_count = 0;
+
+    efi_debug_Print(L"sizeof(XMODEM_BLOCK) = %d\n", sizeof(XMODEM_BLOCK));
 
     while (1) {
-        INTN retry;
-        INTN c;
-
-        if (first_flag == 1){
-            wait_ms(2000);
-            efi_debug_Print(L"Send NAK at line:%d\n", __LINE__);
+        if (firsttime == 1) {
             efi_serial_putc(serialio, XMODEM_NAK);
-            for (retry = 0; retry < XMODEM_SERIAL_RETRY_MAX; retry++) {
-                c = efi_serial_getc_timeout(serialio);
-                if (c == XMODEM_SOH || c == XMODEM_EOT) {
-                    break;
-                }
-            } // retry end
-        } else {
-            c = efi_serial_getc_timeout(serialio);
+            wait_ms(100);
+            firsttime = 0;
         }
-        
-        
 
-        if ( c == XMODEM_SOH ) {
-            first_flag = 0;
-            // receive 2 + 128 bytes
-            UINT8 buf[XMODEM_BLOCK_SIZE * 2] = {0};
-            buf[0] = XMODEM_SOH;
-            INTN receive_bytes = 1;
-            for (retry = 0; retry < XMODEM_SERIAL_RETRY_MAX; retry++) {
-                while (receive_bytes < XMODEM_BLOCK_SIZE) {
-                    INTN c = efi_serial_getc_timeout(serialio);
-                    if ( c < 0 ) {
-                        continue;
-                    }
-                    buf[receive_bytes] = c;
-                    receive_bytes++;
-                }
-            } // retry end
-            if ( (receive_bytes < XMODEM_BLOCK_SIZE)) {
-                if (xmodem_nak_count < XMODEM_NAK_LIMIT) {
-                    efi_debug_Print(L"Send NAK at line:%d\n", __LINE__);
-                    efi_serial_putc(serialio, XMODEM_NAK);
-                    xmodem_nak_count++;
-                    continue; // continue from top
+        INTN c = efi_serial_getc_timeout(serialio, 3000);
+        efi_debug_Print(L"c = %02x\n", c);
+
+        if (c == EOF) {
+            // Receive timeout
+            // Send NAK
+            efi_serial_putc(serialio, XMODEM_NAK);
+            continue;
+        } else if (c == XMODEM_SOH) {
+            // receive start
+            efi_debug_Print(L"Receive start\n");
+            XMODEM_BLOCK blk;
+            UINT8 *blk_p = (UINT8 *)(&blk);
+            for (INTN i = 0; i < XMODEM_BLOCK_SIZE; i++) {
+                blk_p[i] = 0xff;
+            }
+            blk.soh = c;
+            INTN recv_byte;
+            for (recv_byte = 1; recv_byte < XMODEM_BLOCK_SIZE; recv_byte++) {
+                c = efi_serial_getc_timeout(serialio, 10000);
+                if (c == EOF) {
+                    // timeout
+                    break;
                 } else {
-                    // Cancel
-                    efi_debug_Print(L"xmodem receive failure!!\n");
-                    efi_serial_putc(serialio, XMODEM_CAN);
-                    break; // exit while(1) loop
+                    blk_p[recv_byte] = (UINT8)c;
                 }
             }
-            // else 
-            // dump received data
-            for ( INTN i = 0; i < XMODEM_BLOCK_SIZE; i += 8) {
-                for ( INTN j = 0; j < 8; j++ ) {
-                    if ( (i+j) > XMODEM_BLOCK_SIZE) {
-                        break;
+            if (recv_byte != XMODEM_BLOCK_SIZE) {
+                efi_debug_Print(L"Send NAK at %d\n", __LINE__);
+                efi_debug_Print(L"recv_byte = %d\n", recv_byte);
+                for (INTN i = 0; i < XMODEM_BLOCK_SIZE; i+=8) {
+                    for (INTN j = 0; j < 8; j++) {
+                        efi_debug_Print(L"%02x ", blk_p[i+j]);
                     }
-                    efi_debug_Print(L"%02x ", buf[i+j]);
+                    efi_debug_Print(L"\n");
+                }
+                efi_serial_putc(serialio, XMODEM_NAK);
+                nak_count++;
+                if (XMODEM_NAK_LIMIT <= nak_count) {
+                    return;
+                }
+                continue;
+            }
+            // debug dump
+            for (INTN i = 0; i < XMODEM_BLOCK_SIZE; i+=8) {
+                for (INTN j = 0; j < 8; j++) {
+                    efi_debug_Print(L"%02x ", blk_p[i+j]);
                 }
                 efi_debug_Print(L"\n");
             }
-            // error check
-            XMODEM_BLOCK *blk = (XMODEM_BLOCK *)buf;
-            UINT8 blknum_xor = blk->blknum ^ blk->blknum_rev;
-            UINTN checksum = 0;
-            for (INTN i = 0; i < XMODEM_DATA_SIZE; i++ ) {
-                checksum = (checksum + (UINTN)blk->data[i]) % 256;
-            }
-            if ((blknum_xor != 0xff) ||
-                (blk->blknum != next_block_number) ||
-                (blk->checksum != checksum)
-            ) {
-                // error
-                if (blknum_xor != 0xff) {
-                    efi_debug_Print(L"Error: block number != ~(block number)\n");
-                    efi_debug_Print(L"blk->blknum : %02x, blk->blknum_rev : %02x\n", blk->blknum, blk->blknum_rev);
-                }
-                if (blk->blknum != next_block_number) {
-                    efi_debug_Print(L"Error: block number != next_block_number\n");
-                    efi_debug_Print(L"blk->blknum : %02x, next_block_number : %02x\n", blk->blknum, next_block_number);
-                }
-                if (blk->checksum != checksum) {
-                    efi_debug_Print(L"Error: checksum missmatch\n");
-                    efi_debug_Print(L"blk->checksum : %02x, checksum : %02x\n", blk->checksum, checksum);
-                }
-                // send NAK
-                efi_debug_Print(L"Send NAK at line:%d\n", __LINE__);
-                efi_serial_putc(serialio, XMODEM_NAK);
-                xmodem_nak_count++;
-                continue; // continue from top
-            }
+            // finish
+            efi_serial_putc(serialio, XMODEM_ACK);
+            wait_ms(100);
         } else if (c == XMODEM_EOT) {
-            // end
+            // finish
             efi_serial_putc(serialio, XMODEM_ACK);
             break;
+        } else if (c == XMODEM_CAN) {
+            // cancel
+            return;
         } else {
             // skip
             continue;
         }
-        efi_debug_Print(L"Receive success!\n");
-        next_block_number = (next_block_number + 1) % 256;
-        efi_serial_putc(serialio, XMODEM_ACK);
     }
-    return;
 }
 
 
 EFI_STATUS
 efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
 {
-    EFI_GUID serial_io_protocol = SERIAL_IO_PROTOCOL;
     EFI_STATUS efi_status;
-    SERIAL_IO_INTERFACE *serialio;
 
     InitializeLib(image_handle, systab);
 
-    // search handler
-    UINTN handlers_size = 0;
-    EFI_HANDLE *handlers = NULL;
+    // log file io protocol
+    EFI_GUID loaded_image_protocol = LOADED_IMAGE_PROTOCOL;
+    EFI_GUID simple_file_system_protocol = SIMPLE_FILE_SYSTEM_PROTOCOL;
+    EFI_LOADED_IMAGE *loaded_image;
+    EFI_FILE_IO_INTERFACE *volume;
+
     efi_status = uefi_call_wrapper(
-        BS->LocateHandle,
-        5,
-        ByProtocol,
-        &serial_io_protocol,
-        0,
-        &handlers_size,
-        handlers
-    );
-    if (efi_status == EFI_BUFFER_TOO_SMALL) {
-        efi_status = uefi_call_wrapper(BS->AllocatePool,
-            3,
-            EfiBootServicesData,
-            handlers_size,
-            (VOID **)&handlers
-        );
-        efi_status = uefi_call_wrapper(
-            BS->LocateHandle,
-            5,
-            ByProtocol,
-            &serial_io_protocol,
-            0,
-            &handlers_size,
-            handlers
-        );
-    }
-    if (handlers == NULL || EFI_ERROR(efi_status)) {
-        FreePool(handlers);
-        return efi_status;
-    }
-    Print(L"%d serial ports found\n", handlers_size / sizeof(EFI_HANDLE));
-
-
-    // get SERIAL_IO_PROTOCOL
-    // use COM0
-	efi_status = uefi_call_wrapper(
-		BS->HandleProtocol,
+        BS->HandleProtocol,
         3,
-        handlers[0],
-		&serial_io_protocol,
-        (VOID **)&serialio
+        image_handle,
+        &loaded_image_protocol,
+        (VOID **)&loaded_image
     );
+    MY_EFI_ASSERT(efi_status, __LINE__);
+    efi_status = uefi_call_wrapper(
+        BS->HandleProtocol,
+        3,
+        loaded_image->DeviceHandle,
+        &simple_file_system_protocol,
+        (VOID *)&volume
+    );
+    MY_EFI_ASSERT(efi_status, __LINE__);
+    // volume open
+    efi_status = uefi_call_wrapper(
+        volume->OpenVolume,
+        2,
+        volume,
+        &file_protocol_root
+    );
+    MY_EFI_ASSERT(efi_status, __LINE__);
 
+    // Serial io
+    EFI_HANDLE *serial_handlers;
+    INTN serial_handler_items;
+    SERIAL_IO_INTERFACE *serialio;
+
+    efi_status = search_serial_handlers(&serial_handlers, &serial_handler_items);
     if (EFI_ERROR(efi_status)) {
-        Print(L"efi_status is not EFI_SUCCESS\n");
+        // error!
+        Print(L"serial handlers not found!\n");
         return efi_status;
     }
-    FreePool(handlers);
+    Print(L"%d serial ports found!\n", serial_handler_items);
 
-    if (serialio == NULL) {
-        Print(L"serialio == NULL\n");
-        return -1;
-    }
+    // Open xmodem serial port
+    efi_status = open_serial_port(&serialio, serial_handlers, 0);
+
+    // Reset
+    efi_status = uefi_call_wrapper(serialio->Reset, 1, serialio);
+    MY_EFI_ASSERT(efi_status, __LINE__);
 
     // set timeout
     efi_status = uefi_call_wrapper(
@@ -363,12 +500,13 @@ efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         8, /* 8bit data */
         OneStopBit
     );
-    if (EFI_ERROR(efi_status)) {
-        Print(L"efi_status is not EFI_SUCCESS\n");
-    }
+    MY_EFI_ASSERT(efi_status, __LINE__);
 
     // xmodem_dump(serialio);
     uefi_xmodem_receive(serialio);
+
+    efi_status = uefi_call_wrapper(file_protocol_root->Close, 1, file_protocol_root);
+    MY_EFI_ASSERT(efi_status, __LINE__);
 
 	return EFI_SUCCESS;
 }
