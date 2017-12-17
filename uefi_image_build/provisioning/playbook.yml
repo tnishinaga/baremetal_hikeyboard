@@ -1,0 +1,54 @@
+
+# update
+- hosts: all
+  tasks:
+    - name: install basic packages
+      apt: name={{ item }} update_cache=yes state=latest
+      with_items:
+        - git
+        - build-essential
+        - python
+        - python-dev
+        - nasm
+        - iasl
+        - clang
+        - uuid-dev
+      become: true
+
+    # Toolchain
+    - name: install cross-compiler
+      unarchive:
+        src: https://releases.linaro.org/components/toolchain/binaries/latest/aarch64-linux-gnu/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz
+        dest: /usr/local/
+        remote_src: True
+      become: true
+
+    # EDK2
+    - name: uefi-tools helper scripts
+      git:
+        repo: https://github.com/tianocore/edk2
+        dest: ~/edk2
+        version: master
+        depth: 1
+    - name: Enable HTTP boot for ArmVirtQemu
+      replace:
+        regexp: " *DEFINE *HTTP_BOOT_ENABLE *= *FALSE"
+        replace: " DEFINE HTTP_BOOT_ENABLE = TRUE"
+        path: ~/edk2/ArmVirtPkg/ArmVirtQemu.dsc
+    - name: uefi-tools helper scripts
+      git:
+        repo: https://git.linaro.org/uefi/uefi-tools.git
+        dest: ~/uefi-tools
+        version: master
+        depth: 1
+    - name: Build OVMF image for qemu-aarch64
+      command: "~/uefi-tools/uefi-build.sh qemu64"
+      args:
+        chdir: "~/edk2"
+      environment:
+        GCC5_AARCH64_PREFIX: "aarch64-linux-gnu-"
+        PATH: "{{ ansible_env.PATH }}:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu/bin"
+    - name: fetch QEMU_EFI.fd
+      fetch:
+        src: "~/edk2/Build/ArmVirtQemu-AARCH64/RELEASE_GCC5/FV/QEMU_EFI.fd"
+        dest: "fetched_files"
