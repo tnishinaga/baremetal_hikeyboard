@@ -13,21 +13,29 @@
         - iasl
         - clang
         - uuid-dev
+        - libssl-dev
       become: true
 
     # Toolchain
-    - name: install cross-compiler
+    - name: install cross-compiler for aarch64
       unarchive:
         src: https://releases.linaro.org/components/toolchain/binaries/latest/aarch64-linux-gnu/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz
         dest: /usr/local/
         remote_src: True
       become: true
+    - name: install cross-compiler for aarch32(hf)
+      unarchive:
+        src: https://releases.linaro.org/components/toolchain/binaries/latest/arm-linux-gnueabihf/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabihf.tar.xz
+        dest: /usr/local/
+        remote_src: True
+      become: true
 
     # EDK2
-    - name: uefi-tools helper scripts
+    - name: clone edk2
       git:
         repo: https://github.com/tianocore/edk2
         dest: ~/edk2
+        force: yes
         version: master
         depth: 1
     - name: Enable HTTP boot for ArmVirtQemu
@@ -52,3 +60,94 @@
       fetch:
         src: "~/edk2/Build/ArmVirtQemu-AARCH64/RELEASE_GCC5/FV/QEMU_EFI.fd"
         dest: "fetched_files"
+
+    # build hikey UEFI image
+    - name: create workspace for hikey
+      file:
+        path: ~/hikey-uefi/
+        state: directory
+    - name: clone uefi-tools to workspace
+      git:
+        repo: https://git.linaro.org/uefi/uefi-tools.git
+        dest: ~/hikey-uefi/uefi-tools
+        version: master
+        depth: 1
+    - name: clone l-loader for hikey
+      git:
+        repo: https://github.com/96boards/l-loader
+        dest: ~/hikey-uefi/l-loader
+        version: master
+        depth: 1
+    - name: clone 96boards-hikey's edk2
+      git:
+        repo: https://github.com/96boards-hikey/edk2
+        dest: ~/hikey-uefi/edk2
+        version: origin/hikey-aosp
+        depth: 1
+    # set up to build hikey uefi image
+    - name: clone OpenPlatformPkg
+      git:
+        repo: https://github.com/96boards-hikey/OpenPlatformPkg
+        dest: ~/hikey-uefi/OpenPlatformPkg
+        version: hikey-aosp
+        depth: 1
+        force: yes
+    - name: Create symbolic link to edk2
+      file:
+        src: ~/hikey-uefi/OpenPlatformPkg
+        dest: ~/hikey-uefi/edk2/OpenPlatformPkg
+        state: link
+    - name: appply patch for enable http boot
+      patch:
+        src: files/Hikey.dsc.patch
+        dest: ~/hikey-uefi/OpenPlatformPkg/Platforms/Hisilicon/HiKey/HiKey.dsc
+        binary: yes
+    - name: clone ARM-TRUSTED-FIRMWARE
+      git:
+        repo: https://github.com/ARM-software/arm-trusted-firmware
+        dest: ~/hikey-uefi/arm-trusted-firmware
+        version: master
+        depth: 1
+    - name: clone OPTEE_OS
+      git:
+        repo: https://github.com/OP-TEE/optee_os
+        dest: ~/hikey-uefi/optee_os
+        version: master
+        depth: 1
+    - name: Build uefi image for hikey
+      command: "~/uefi-tools/uefi-build.sh -T GCC5 -b RELEASE -a ~/hikey-uefi/arm-trusted-firmware -s ~/hikey-uefi/optee_os hikey"
+      args:
+        chdir: "~/hikey-uefi/edk2"
+      environment:
+        GCC5_AARCH64_PREFIX: "aarch64-linux-gnu-"
+        GCC5_ARM_PREFIX: "arm-linux-gnueabihf-"
+        PATH: "{{ ansible_env.PATH }}:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu/bin:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabihf/bin"
+    # build l-loader
+    - name: create bl1 symbolic link for l-loader
+      file:
+        src: ~/hikey-uefi/edk2/Build/HiKey/RELEASE_GCC5/FV/bl1.bin
+        dest: ~/hikey-uefi/l-loader/bl1.bin
+        state: link
+    - name: create fip symbolic link for l-loader
+      file:
+        src: ~/hikey-uefi/edk2/Build/HiKey/RELEASE_GCC5/FV/fip.bin
+        dest: ~/hikey-uefi/l-loader/fip.bin
+        state: link
+    - name: build l-loader for hikey
+      command: "make"
+      args:
+        chdir: "~/hikey-uefi/l-loader"
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu/bin:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabihf/bin"
+    - name: fetch files for hikey
+      fetch:
+        src: ~/hikey-uefi/l-loader/{{ item }}
+        dest: "fetched_files/"
+        flat: yes
+      with_items:
+        - l-loader.bin
+        - ptable-aosp-4g.img
+        - ptable-aosp-8g.img
+        - ptable-linux-4g.img
+        - ptable-linux-8g.img
+        - fip.bin

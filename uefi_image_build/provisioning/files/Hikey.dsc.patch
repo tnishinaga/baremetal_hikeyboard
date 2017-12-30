@@ -1,0 +1,46 @@
+diff --git a/Platforms/Hisilicon/HiKey/HiKey.dsc b/Platforms/Hisilicon/HiKey/HiKey.dsc
+index 3b99cf5..1292295 100644
+--- a/Platforms/Hisilicon/HiKey/HiKey.dsc
++++ b/Platforms/Hisilicon/HiKey/HiKey.dsc
+@@ -25,6 +25,7 @@
+   BUILD_TARGETS                  = DEBUG|RELEASE
+   SKUID_IDENTIFIER               = DEFAULT
+   FLASH_DEFINITION               = OpenPlatformPkg/Platforms/Hisilicon/HiKey/HiKey.fdf
++  DEFINE HTTP_BOOT_ENABLE        = TRUE
+ 
+ [LibraryClasses.common]
+ !if $(TARGET) == RELEASE
+@@ -128,6 +129,11 @@
+   # Add support for GCC stack protector
+   NULL|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
+ 
++  # Add support for HTTP BOOT
++  !if $(HTTP_BOOT_ENABLE) == TRUE
++    HttpLib|MdeModulePkg/Library/DxeHttpLib/DxeHttpLib.inf
++  !endif
++
+ [LibraryClasses.common.SEC]
+   PrePiLib|EmbeddedPkg/Library/PrePiLib/PrePiLib.inf
+   ExtractGuidedSectionLib|EmbeddedPkg/Library/PrePiExtractGuidedSectionLib/PrePiExtractGuidedSectionLib.inf
+@@ -362,6 +368,7 @@
+ 
+   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut|1
+ 
++
+ ################################################################################
+ #
+ # Components Section - list of all EDK II Modules needed by this Platform
+@@ -479,6 +486,13 @@
+   MdeModulePkg/Universal/Network/Mtftp4Dxe/Mtftp4Dxe.inf
+   MdeModulePkg/Universal/Network/UefiPxeBcDxe/UefiPxeBcDxe.inf
+ 
++!if $(HTTP_BOOT_ENABLE) == TRUE
++  NetworkPkg/DnsDxe/DnsDxe.inf
++  NetworkPkg/HttpUtilitiesDxe/HttpUtilitiesDxe.inf
++  NetworkPkg/HttpDxe/HttpDxe.inf
++  NetworkPkg/HttpBootDxe/HttpBootDxe.inf
++!endif
++
+   #
+   # AX88772 Ethernet Driver
+   #
