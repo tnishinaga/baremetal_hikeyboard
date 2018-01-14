@@ -1,5 +1,7 @@
 CROSS_COMPILE=aarch64-linux-gnu-
 PREFIX=/usr/aarch64-linux-gnu/
+TARGET=main
+OBJS=arm_pl011.o arm_pl061.o
 
 CC= $(CROSS_COMPILE)gcc
 AS= $(CROSS_COMPILE)gcc
@@ -36,10 +38,10 @@ LDFLAGS+=-L$(PREFIX)/lib
 
 
 
-all: main.efi main.efi.debug
+all: $(TARGET).efi $(TARGET).efi.debug
 
 # rebuild shared object to PE binary
-%.efi: %.so
+$(TARGET).efi: $(TARGET).so
 	$(OBJCOPY)	-j .text	\
 				-j .sdata	\
 				-j .data	\
@@ -52,10 +54,10 @@ all: main.efi main.efi.debug
 				-j .rel*	\
 				-j .rela* 	\
 				-j .reloc 	\
-				-O binary  $*.so $@
+				-O binary  $(TARGET).so $@
 
 # Extract debug symboles
-%.efi.debug: %.so
+$(TARGET).efi.debug: $(TARGET).so
 	$(OBJCOPY)	-j .debug_info		\
 				-j .debug_abbrev	\
 				-j .debug_aranges	\
@@ -63,10 +65,10 @@ all: main.efi main.efi.debug
 				-j .debug_str		\
 				-j .debug_ranges	\
 				-j .note.gnu.build-id \
-				-O binary  $*.so $@
+				-O binary  $(TARGET).so $@
 
 # build shared object
-%.so: %.o
+$(TARGET).so: $(TARGET).o $(OBJS)
 	$(LD) $(LDFLAGS) $(STARTOBJ) $^ -o $@	\
 		-lefi -lgnuefi $(LIBGCC) 			\
 		-T $(LDSCRIPT)
