@@ -50,3 +50,14 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# UEFI applications
+*.efi
+*.efi.debug
+
+
+.env
+
+.directory
+.retry
+.vagrant
