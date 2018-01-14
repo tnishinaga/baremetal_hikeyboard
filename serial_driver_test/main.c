@@ -6,7 +6,7 @@
 #include <string.h>
 
 // memmap
-#include "qemu_arm_virt.h"
+#include "memmap.h"
 
 // Peripheral drivers
 #include "arm_pl011.h"

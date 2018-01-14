@@ -2,6 +2,7 @@ CROSS_COMPILE=aarch64-linux-gnu-
 PREFIX=/usr/aarch64-linux-gnu/
 TARGET=main
 OBJS=arm_pl011.o arm_pl061.o
+MACHINE=TARGET_QEMU
 
 CC= $(CROSS_COMPILE)gcc
 AS= $(CROSS_COMPILE)gcc
@@ -27,7 +28,8 @@ INCLUDES= -I. \
 CFLAGS= -std=c11 -g3 -O2 -Wall -Wextra -Werror \
 	-fshort-wchar -fno-strict-aliasing \
 	-fno-merge-all-constants -ffreestanding \
-	-fno-stack-protector -fno-stack-check
+	-fno-stack-protector -fno-stack-check \
+	-D$(MACHINE)
 # LDFLAGS
 LDFLAGS= -nostdlib --warn-common --no-undefined \
 	--fatal-warnings --build-id=sha1 \
