@@ -59,6 +59,14 @@ typedef struct {
 
 // USER LED
 // GPIO4_0, 1, 2, 3
+void pl061_gpio_set(uint32_t *base, uint16_t mask, uint8_t data)
+{
+    // get GPIODATA register address
+    volatile uint8_t *GPIODATA = (volatile uint8_t *)base;
+    // set gpio data
+    *(GPIODATA + (mask << 2)) = data;
+    return;
+}
 
 EFI_STATUS
 efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
@@ -68,16 +76,12 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
 	// set GPIO4_[0-3] to output
 	GPIO4->GPIODIR = 0x0f;
 	while (1) {
-		for (volatile int i = 0; i < 10000000; i++);
-		GPIO4->GPIODATA_0 = 0x0f;
-		GPIO4->GPIODATA_1 = 0x0f;
-		GPIO4->GPIODATA_2 = 0x0f;
-		GPIO4->GPIODATA_3 = 0x0f;
-		for (volatile int i = 0; i < 10000000; i++);
-		GPIO4->GPIODATA_0 = 0;
-		GPIO4->GPIODATA_1 = 0;
-		GPIO4->GPIODATA_2 = 0;
-		GPIO4->GPIODATA_3 = 0;
+        for (volatile int i = 0; i < 10000000; i++);
+        // set GPIO4_[0-3] to High
+        pl061_gpio_set((uint32_t *)GPIO4, 0x0f, 0x0f);
+        for (volatile int i = 0; i < 10000000; i++);
+        // set GPIO4_[0-3] to Low
+        pl061_gpio_set((uint32_t *)GPIO4, 0x0f, 0x00);
 	}
 
 	return EFI_SUCCESS;
