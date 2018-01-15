@@ -1,6 +1,6 @@
 #include "arm_pl011.h"
 
-void pl011_init(PL011_Type *serial, uint32_t uart_clock)
+void pl011_init(PL011_Type *serial, uint64_t uart_clock)
 {
     // disable uart
     serial->CR = 0;
