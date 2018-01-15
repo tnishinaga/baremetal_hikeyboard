@@ -23,9 +23,13 @@ efi_panic(EFI_STATUS efi_status, INTN line)
 
 #define MY_EFI_ASSERT(status, line) if(EFI_ERROR(status)) efi_panic(status, line);
 
-
-#define UART_CLOCK (24000000 * 3UL) // QEMU set apb-pclk to 24MHz(x3 PLL?)
-
+#ifdef TARGET_QEMU
+    #define UART_CLOCK (24000000 * 3UL) // QEMU set apb-pclk to 24MHz(x3 PLL?)
+    #define STDIO UART
+#elif TARGET_HIKEY
+    #define UART_CLOCK (150 * 1000000UL) // 150MHz?
+    #define STDIO UART1
+#endif
 
 EFI_STATUS
 efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
@@ -85,7 +89,7 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
         mapkey
     );
 
-    PL011_Type *stdio = UART;
+    PL011_Type *stdio = STDIO;
 
     pl011_init(stdio, UART_CLOCK);
 
