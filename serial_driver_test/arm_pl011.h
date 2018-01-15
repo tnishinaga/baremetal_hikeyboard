@@ -57,6 +57,6 @@ typedef struct {
 
 
 // functions
-extern void pl011_init(PL011_Type *serial, uint64_t uart_clock);
-extern int pl011_putc(int c, PL011_Type *serial);
-extern int pl011_getc(PL011_Type *serial);
+void pl011_init(PL011_Type *serial, uint64_t uart_clock);
+int pl011_putc(int c, PL011_Type *serial);
+int pl011_getc(PL011_Type *serial);
