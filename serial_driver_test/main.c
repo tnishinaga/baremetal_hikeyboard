@@ -26,9 +26,9 @@ efi_panic(EFI_STATUS efi_status, INTN line)
 #ifdef TARGET_QEMU
     #define UART_CLOCK (24000000 * 3UL) // QEMU set apb-pclk to 24MHz(x3 PLL?)
     #define STDIO UART
-#elif TARGET_HIKEY
-    #define UART_CLOCK (150 * 1000000UL) // 150MHz?
-    #define STDIO UART1
+#elif TARGET_HIKEY_CIRCUITCO
+    #define UART_CLOCK (192 * 100000UL) // 19.2MHz
+    #define STDIO UART3
 #endif
 
 EFI_STATUS
@@ -37,7 +37,7 @@ efi_main (EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *systab)
     EFI_STATUS efi_status;
 
     InitializeLib(image_handle, systab);
-
+    
     // get memory map
     UINTN memmap_size = sizeof(EFI_MEMORY_DESCRIPTOR);
     EFI_MEMORY_DESCRIPTOR *memmap = NULL;
