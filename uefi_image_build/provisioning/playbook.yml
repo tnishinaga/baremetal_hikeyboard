@@ -61,6 +61,7 @@
         src: "~/edk2/Build/ArmVirtQemu-AARCH64/RELEASE_GCC5/FV/QEMU_EFI.fd"
         dest: "fetched_files"
 
+
     # build hikey UEFI image
     - name: create workspace for hikey
       file:
@@ -68,28 +69,39 @@
         state: directory
     - name: clone uefi-tools to workspace
       git:
-        repo: https://git.linaro.org/uefi/uefi-tools.git
+        repo: https://git.linaro.org/uefi/uefi-tools
         dest: ~/hikey-uefi/uefi-tools
         version: master
         depth: 1
-    - name: clone l-loader for hikey
+        force: yes
+    - name: Replace BUILDFLAGS if hardware is built by CircuitCo
+      replace:
+        regexp: "#BUILDFLAGS=-DSERIAL_BASE=0xF8015000"
+        replace: "BUILDFLAGS=-DSERIAL_BASE=0xF8015000"
+        path: ~/hikey-uefi/uefi-tools/platforms.config
+    - name: clone arm-trusted-firmware to workspace
       git:
-        repo: https://github.com/96boards/l-loader
-        dest: ~/hikey-uefi/l-loader
+        repo: https://github.com/ARM-software/arm-trusted-firmware
+        dest: ~/hikey-uefi/arm-trusted-firmware
+        version: integration
+        depth: 1
+    - name: clone optee_os to workspace
+      git:
+        repo: https://github.com/OP-TEE/optee_os
+        dest: ~/hikey-uefi/optee_os
         version: master
         depth: 1
-    - name: clone 96boards-hikey's edk2
+    - name: clone edk2 to workspace
       git:
         repo: https://github.com/96boards-hikey/edk2
         dest: ~/hikey-uefi/edk2
-        version: origin/hikey-aosp
+        version: testing/hikey960_v2.5
         depth: 1
-    # set up to build hikey uefi image
-    - name: clone OpenPlatformPkg
+    - name: clone OpenPlatformPkg to workspace
       git:
         repo: https://github.com/96boards-hikey/OpenPlatformPkg
         dest: ~/hikey-uefi/OpenPlatformPkg
-        version: hikey-aosp
+        version: testing/hikey960_v1.3.4
         depth: 1
         force: yes
     - name: Create symbolic link to edk2
@@ -102,39 +114,53 @@
         src: files/Hikey.dsc.patch
         dest: ~/hikey-uefi/OpenPlatformPkg/Platforms/Hisilicon/HiKey/HiKey.dsc
         binary: yes
-    - name: clone ARM-TRUSTED-FIRMWARE
+    - name: clone l-loader to workspace
       git:
-        repo: https://github.com/ARM-software/arm-trusted-firmware
-        dest: ~/hikey-uefi/arm-trusted-firmware
+        repo: https://github.com/96boards-hikey/l-loader
+        dest: ~/hikey-uefi/l-loader
+        version: testing/hikey960_v1.2
+        depth: 1
+    - name: clone atf-fastboot to workspace
+      git:
+        repo: https://github.com/96boards-hikey/atf-fastboot
+        dest: ~/hikey-uefi/atf-fastboot
         version: master
         depth: 1
-    - name: clone OPTEE_OS
-      git:
-        repo: https://github.com/OP-TEE/optee_os
-        dest: ~/hikey-uefi/optee_os
-        version: master
-        depth: 1
+
+    # build fastboot
+    - name: Build atf-fastboot for hikey
+      command: "make -j2 PLAT=hikey DEBUG=1"
+      args:
+        chdir: "~/hikey-uefi/atf-fastboot"
+      environment:
+        AARCH64_TOOLCHAIN: "GCC5"
+        CROSS_COMPILE: "aarch64-linux-gnu-"
+        EDK2_DIR: "~/hikey-uefi/edk2"
+        BUILD_OPTION: "DEBUG"
+        PATH: "{{ ansible_env.PATH }}:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu/bin:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabihf/bin"
+    # build edk2
     - name: Build uefi image for hikey
-      command: "~/uefi-tools/uefi-build.sh -T GCC5 -b RELEASE -a ~/hikey-uefi/arm-trusted-firmware -s ~/hikey-uefi/optee_os hikey"
+      command: "~/hikey-uefi/uefi-tools/uefi-build.sh -b DEBUG -a ~/hikey-uefi/arm-trusted-firmware -s ~/hikey-uefi/optee_os hikey"
       args:
         chdir: "~/hikey-uefi/edk2"
       environment:
-        GCC5_AARCH64_PREFIX: "aarch64-linux-gnu-"
-        GCC5_ARM_PREFIX: "arm-linux-gnueabihf-"
+        AARCH64_TOOLCHAIN: "GCC5"
+        CROSS_COMPILE: "aarch64-linux-gnu-"
+        EDK2_DIR: "~/hikey-uefi/edk2"
         PATH: "{{ ansible_env.PATH }}:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu/bin:/usr/local/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabihf/bin"
     # build l-loader
     - name: create bl1 symbolic link for l-loader
       file:
-        src: ~/hikey-uefi/edk2/Build/HiKey/RELEASE_GCC5/FV/bl1.bin
+        src: ~/hikey-uefi/edk2/Build/HiKey/DEBUG_GCC5/FV/bl1.bin
         dest: ~/hikey-uefi/l-loader/bl1.bin
         state: link
-    - name: create fip symbolic link for l-loader
+    - name: create fastboot symbolic link for l-loader
       file:
-        src: ~/hikey-uefi/edk2/Build/HiKey/RELEASE_GCC5/FV/fip.bin
-        dest: ~/hikey-uefi/l-loader/fip.bin
+        src: ~/hikey-uefi/atf-fastboot/build/hikey/debug/bl1.bin
+        dest: ~/hikey-uefi/l-loader/fastboot.bin
         state: link
-    - name: build l-loader for hikey
-      command: "make"
+    - name: Build l-loader for hikey
+      command: "make hikey PTABLE_LST=linux-4g"
       args:
         chdir: "~/hikey-uefi/l-loader"
       environment:
@@ -146,8 +172,5 @@
         flat: yes
       with_items:
         - l-loader.bin
-        - ptable-aosp-4g.img
-        - ptable-aosp-8g.img
         - ptable-linux-4g.img
-        - ptable-linux-8g.img
-        - fip.bin
+        - fastboot.bin
